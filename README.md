@@ -5,6 +5,7 @@
 ## Features
 
 - PPO agent (implemented)
+- PPG agent (implemented)
 - Training APIs:
   - `train(train_cfg)` - full training loop driven by a `TrainConfig`
   - `train_one_update()` - runs one complete update (collect rollouts, update, logging, etc.)
@@ -15,7 +16,6 @@
 ## Roadmap
 
 Planned additions:
-- PPG
 - DQN
 - QR-DQN
 - Rainbow-style components
