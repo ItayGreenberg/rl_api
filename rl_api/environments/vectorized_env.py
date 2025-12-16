@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
 import numpy as np
 import torch
-
+from torch import Tensor
 from rl_api.environments.types import BatchObs
 
 

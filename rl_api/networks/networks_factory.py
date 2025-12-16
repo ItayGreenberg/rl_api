@@ -1,7 +1,7 @@
 # TODO
 
 from rl_api.networks.configs import ActorConfig, CriticConfig
-from rl_api.networks.networks import ActorNetwork, CriticNetwork, PPOPolicyNetwork
+from rl_api.networks.networks import ActorNetwork, CriticNetwork, PPOPolicyNetwork, PPGPolicyNetwork, PPGValueNetwork
 
 
 from typing import Optional
@@ -68,4 +68,44 @@ def build_ppo_optimizer(policy_network: PPOPolicyNetwork,
 
     return policy_optimizer
 
+
+
+def build_ppg_optimizers(policy_network: PPGPolicyNetwork, value_network: PPGValueNetwork,
+                         enc_lr = 1e-4, actor_lr = 1e-4, critic_lr = 1e-4,
+                         weight_decay=0):
+    
+    policy_enc_params = list(policy_network.encoder.parameters()) 
+    policy_actor_params  = list(policy_network.action_head.parameters()) 
+    policy_critic_params = list(policy_network.aux_value_head.parameters())
+
+    value_enc_params = list(value_network.encoder.parameters()) 
+    value_critic_params = list(value_network.value_head.parameters())
+
+
+
+
+    policy_optimizer = Adam([
+        {"params": policy_enc_params,   "lr": enc_lr,   "weight_decay": weight_decay},
+        {"params": policy_actor_params, "lr": actor_lr, "weight_decay": weight_decay},
+    ], betas=(0.9, 0.999), eps=1e-8)
+
+
+
+    aux_optimizer = Adam([
+        {"params": policy_enc_params,    "lr": enc_lr,    "weight_decay": weight_decay},
+        {"params": policy_critic_params, "lr": critic_lr, "weight_decay": weight_decay},
+    ], betas=(0.9, 0.999), eps=1e-8)
+
+
+
+    critic_optimizer = Adam([
+        {"params": value_enc_params,    "lr": enc_lr,    "weight_decay": weight_decay},
+        {"params": value_critic_params, "lr": critic_lr, "weight_decay": weight_decay},
+    ], betas=(0.9, 0.999), eps=1e-8)
+
+    return {
+        "policy_optimizer": policy_optimizer,
+        "aux_optimizer": aux_optimizer,
+        "critic_optimizer": critic_optimizer,
+    }
 

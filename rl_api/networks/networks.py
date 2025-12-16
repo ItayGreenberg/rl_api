@@ -145,3 +145,78 @@ class PPOPolicyNetwork(nn.Module):
         return dist, values
 
 
+class PPGPolicyNetwork(nn.Module):
+    """
+    Policy net used in both:
+      - policy phase (PPO-style): uses action logits only
+      - auxiliary phase: matches old policy (KL to stored old logits) + aux value head
+
+        encoder -> z
+          ├-> action_head    -> logits -> dist
+          └-> aux_value_head -> v_aux (only when requested)
+
+    Contract matches PPO naming:
+      - obs   : (B, *obs_shape)  e.g. (B, seq_len, num_feats) or (B, feat_dim)
+      - ctx   : (B, context_dim)
+      - masks : (B, action_dim) bool
+    """
+    def __init__(
+        self,
+        encoder: nn.Module,
+        action_head: nn.Module,
+        aux_value_head: nn.Module,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.action_head = action_head
+        self.aux_value_head = aux_value_head
+
+    def forward(
+        self,
+        obs: Tensor,
+        ctx: Tensor,
+        masks: Tensor,
+        *,
+        return_aux_value: bool = False,
+        return_logits: bool = False,
+    ):
+        """
+        Returns:
+          - default (policy phase): dist
+          - aux phase: (logits, v_aux)
+          - optionally, if return_logits=True and return_aux_value=False: (dist, logits)
+            (handy if you want logits for logging/debug without recomputing)
+        """
+        z = self.encoder(obs)                         # (B, H)
+        logits = self.action_head(z, ctx, masks)      # (B, A)
+
+        if return_aux_value:
+            v_aux = self.aux_value_head(z, ctx)       # (B,)
+            return logits, v_aux
+
+        dist = Categorical(logits=logits)
+        if return_logits:
+            return dist, logits
+        return dist
+
+
+class PPGValueNetwork(nn.Module):
+    """
+    Stand-alone critic V_phi as required by PPG.
+    Completely disjoint parameters from PPGPolicyNetwork.
+
+    Contract matches PPO naming:
+      - obs: (B, *obs_shape)
+      - ctx: (B, context_dim)
+    """
+    def __init__(self, encoder: nn.Module, value_head: nn.Module):
+        super().__init__()
+        self.encoder = encoder
+        self.value_head = value_head
+
+    def forward(self, obs: Tensor, ctx: Tensor):
+        z = self.encoder(obs)             # (B, H)
+        v = self.value_head(z, ctx)       # (B,)
+        return v
+
+

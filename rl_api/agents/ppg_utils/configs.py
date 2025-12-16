@@ -3,13 +3,12 @@ from typing import Optional, Dict, Tuple
 
 @dataclass
 class DimensionConfig:
-    obs_shape: Tuple[int, ...]   # was (seq_len, num_features), now any shape
+    obs_shape: Tuple[int, ...]  
     action_dim: int
     context_dim: int             # still flat context vector dim
-    
+
 @dataclass
 class PPOConfig:
-    num_epochs: int = 2
     clip_eps: float = 0.2
     entropy_coef: float = 0.01
     clip_vf: Optional[float] = None
@@ -22,9 +21,22 @@ class PPOConfig:
 
 
 @dataclass
+class PPGConfig:
+    # policy phase
+    n_pi: int           = 16
+    policy_epochs: int  = 1
+    critic_epochs: int  = 1
+    
+    # auxiliary phase
+    aux_epochs:   int   = 4
+    beta_kl:      float = 0.01      # multiplier on KL term
+
+
+@dataclass
 class BufferConfig:
-    buffer_size: int = 4096
-    batch_size: int = 512
+    buffer_size: int = 4096 # small buffer size
+    ppo_batch_size: int = 512
+    aux_batch_size: int = 512
 
 
 @dataclass
@@ -34,6 +46,7 @@ class EntropySchedulerConfig:
     entropy_coef_end: Optional[float] = None
     entropy_decay_start_step: Optional[float] = None
     entropy_decay_end_step: Optional[float] = None
+
 
 @dataclass
 class TrainingConfig:

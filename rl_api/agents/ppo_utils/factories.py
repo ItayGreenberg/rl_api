@@ -2,11 +2,12 @@ from rl_api.networks.networks import ActorNetwork, CriticNetwork, PPOPolicyNetwo
 
 from rl_api.environments.wrappers import AutoResetVectorEnv
 
+from rl_api.networks.networks_factory import build_ppo_optimizer
 
 from rl_api.agents.ppo_utils.vectorized_agent import VectorizedPPOAgent
 
 from rl_api.agents.ppo_utils.configs import (
-    DimensionConfig, PPOConfig, BufferConfig,
+    DimensionConfig, PPOConfig, BufferConfig, EntropySchedulerConfig,
     TrainingConfig, EvalConfig, LoggingConfig, SavingConfig
 )
 
@@ -27,18 +28,20 @@ def build_ppo_agent(
     dims: DimensionConfig,
     ppo_cfg: PPOConfig,
     buf_cfg: BufferConfig,
+    entropy_sched_cfg: EntropySchedulerConfig,
     policy_net: PPOPolicyNetwork,
     train_env: AutoResetVectorEnv,
     eval_cfg: EvalConfig | None,
     eval_env: AutoResetVectorEnv | None,
-    device: torch.device,
     logging_cfg: LoggingConfig | None = None,
     saving_cfg: SavingConfig | None = None,
     policy_optimizer: torch.optim.Optimizer | None = None,
+    device: torch.device = torch.device("cpu"),
+
 ) -> VectorizedPPOAgent:
     
     if policy_optimizer is None:
-        policy_optimizer = Adam(policy_net.parameters(), lr=3e-4)
+        policy_optimizer = build_ppo_optimizer(policy_net)
 
     if logging_cfg is None:
         logging_cfg = LoggingConfig()
@@ -55,11 +58,13 @@ def build_ppo_agent(
         eval_cfg=eval_cfg,
         ppo_cfg=ppo_cfg,
         buf_cfg=buf_cfg,
+        entropy_sched_cfg=entropy_sched_cfg,
         logging_cfg=logging_cfg,
         saving_cfg=saving_cfg,
         device=device,
     )
     return agent
+
 
 def load_agent_from_checkpoint(agent:VectorizedPPOAgent, path:str, device:torch.device):
     checkpoint = torch.load(path, map_location=device)  
@@ -78,8 +83,6 @@ def load_agent_from_checkpoint(agent:VectorizedPPOAgent, path:str, device:torch.
     agent.best_reward = checkpoint["best_reward"]
 
     return agent
-
-
 
 
 

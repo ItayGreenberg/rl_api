@@ -5,7 +5,7 @@ from rl_api.networks.networks import (
 from rl_api.agents.ppo_utils.buffer import RolloutBufferVec
 
 from rl_api.agents.ppo_utils.configs import (
-    DimensionConfig, PPOConfig, BufferConfig,
+    DimensionConfig, PPOConfig, BufferConfig, EntropySchedulerConfig,
     TrainingConfig, EvalConfig, LoggingConfig, SavingConfig,
     )
 
@@ -40,7 +40,8 @@ class VectorizedPPOAgent:
         train_env: AutoResetVectorEnv,
         ppo_cfg: PPOConfig,
         buf_cfg: BufferConfig,
-        eval_cfg: EvalConfig = None,
+        entropy_sched_cfg: Optional[EntropySchedulerConfig] = None,
+        eval_cfg: Optional[EvalConfig] = None,
         eval_env: Optional[AutoResetVectorEnv] = None,
         logging_cfg: Optional[LoggingConfig] = None,
         saving_cfg:  Optional[SavingConfig] = None,
@@ -67,6 +68,7 @@ class VectorizedPPOAgent:
 
         # — configs —
         self.ppo_cfg = ppo_cfg
+        self.entropy_sched_cfg = entropy_sched_cfg
         self.buf_cfg = buf_cfg
         self.eval_cfg = eval_cfg
         self.logging_cfg = logging_cfg
@@ -118,25 +120,27 @@ class VectorizedPPOAgent:
 
     def _unpack_ppo_cfg(self):
         pc = self.ppo_cfg
-        self.epochs     = pc.num_epochs
-        self.clip_eps   = pc.clip_eps
-        self.clip_vf    = pc.clip_vf
-        self.vf_coef    = pc.vf_coef
-        self.gamma      = pc.gamma
-        self.gae_lambda = pc.gae_lambda
-        self.target_kl  = pc.target_kl
-        self.grad_clip  = pc.grad_clip
-        self.entropy_coef = pc.entropy_coef_start
+        self.epochs         = pc.num_epochs
+        self.clip_eps       = pc.clip_eps
+        self.entropy_coef   = pc.entropy_coef
+        self.clip_vf        = pc.clip_vf
+        self.vf_coef        = pc.vf_coef
+        self.gamma          = pc.gamma
+        self.gae_lambda     = pc.gae_lambda
+        self.target_kl      = pc.target_kl
+        self.grad_clip      = pc.grad_clip
 
     def _setup_entropy_sched(self):
-        pc = self.ppo_cfg
+        es = self.entropy_sched_cfg
         self.entropy_scheduler = None
-        if pc.entropy_coef_end is not None and pc.entropy_decay_start_step < pc.entropy_decay_end_step:
+        if es is not None and es.use_scheduler:
+            if es.entropy_coef_start != self.entropy_coef:
+                raise ValueError(f"entropy_coef_start {es.entropy_coef_start} != entropy from ppo_cfg {self.entropy_coef}")
             self.entropy_scheduler = LinearScheduler(
-                start_step=pc.entropy_decay_start_step,
-                end_step=pc.entropy_decay_end_step,
-                start_value=pc.entropy_coef_start,
-                end_value=pc.entropy_coef_end
+                start_step=es.entropy_decay_start_step,
+                end_step=es.entropy_decay_end_step,
+                start_value=es.entropy_coef_start,
+                end_value=es.entropy_coef_end
             )
 
     def _setup_buffers(self):
@@ -281,15 +285,16 @@ class VectorizedPPOAgent:
             # forward through POLICY network
             dist, values = self.policy_net(obs_tensor, ctx_tensor, mask_tensor)
             dist: Categorical
-            values: torch.Tensor  # (n_envs,)
+            values: Tensor  # (n_envs,)
 
             actions = dist.sample()              # (n_envs,)
-            logps   = dist.log_prob(actions)     # (n_envs,)
+            logps: Tensor  = dist.log_prob(actions)     # (n_envs,)
 
             # ------------ env step (torch) --------------------
             # move actions to CPU if env expects CPU tensors
-            actions_cpu = actions.detach().cpu()
-            next_obs, rewards, dones = vec_env.step(actions_cpu)   # rewards, dones: tensors
+            actions_cpu = actions.detach().to("cpu", dtype=torch.int64)  # torch CPU int64
+            actions_np  = actions_cpu.numpy()  # zero-copy view
+            next_obs, rewards, dones = vec_env.step(actions_np)  # likely numpy outputs
 
             # -------------- store in buffer -------------------
             # buffer will move things to its own device; we keep inputs on CPU here
@@ -306,10 +311,11 @@ class VectorizedPPOAgent:
 
             obs = next_obs
             last_dones = dones.detach().cpu()    # keep last dones for bootstrap masking
-            self.global_step += n_envs
+            
 
 
             # ------------- stats ----------------------
+            self.global_step += n_envs
             self.int_stats["reward_sum"]     += float(torch.sum(rewards))
             self.int_stats["total_steps"]    += n_envs
 
@@ -320,7 +326,7 @@ class VectorizedPPOAgent:
         mask_tensor = obs.action_mask.to(self.device, dtype=torch.bool)
 
         _, last_vals = self.policy_net(obs_tensor, ctx_tensor, mask_tensor)
-        last_vals: torch.Tensor = last_vals.detach().cpu()   # (n_envs,)
+        last_vals: Tensor = last_vals.detach().cpu()   # (n_envs,)
 
         # if env was done on last step, bootstrap value is 0 for that env
         if last_dones is None:
@@ -342,33 +348,33 @@ class VectorizedPPOAgent:
         device = self.device
         # ---------- to device -------------------------
         obs         = batch["obs"].to(device)
-        ctxs        = batch["ctx"].to(device)
+        ctx         = batch["ctx"].to(device)
         actions     = batch["actions"].to(device)
         old_lp      = batch["old_logps"].to(device)
         old_vals    = batch["old_values"].to(device)
         returns     = batch["returns"].to(device)
         advs        = batch["advantages"].to(device)
-        masks       = batch["action_masks"].to(device)       
+        action_masks       = batch["action_masks"].to(device)       
 
 
         # ----------- policy network forward ------------------
-        dist, vals = self.policy_net(obs, ctxs, masks)
+        dist, vals = self.policy_net(obs, ctx, action_masks)
         dist: Categorical
         vals: torch.Tensor
         # ------------ actor loss -------------------
-        new_lp  = dist.log_prob(actions)
-        entropy = dist.entropy().mean()
+        new_lp: Tensor  = dist.log_prob(actions)
+        entropy: Tensor = dist.entropy().mean()
 
         ratio :torch.Tensor   = (new_lp - old_lp).exp()
         surr1   = ratio * advs
         surr2   = torch.clamp(ratio, 1-clip_eps, 1+clip_eps) * advs
-        policy_loss  = -torch.min(surr1, surr2).mean()
-        entropy_loss = -ent_coef * entropy
+        policy_loss: Tensor  = -torch.min(surr1, surr2).mean()
+        entropy_loss: Tensor = -ent_coef * entropy
 
         # ---------- critic loss ----------                
-        critic_loss = self.calculate_value_loss(old_values= old_vals, values=vals, returns=returns)
+        critic_loss: Tensor = self.calculate_value_loss(old_values= old_vals, values=vals, returns=returns)
 
-        loss: torch.Tensor = policy_loss + entropy_loss + critic_loss
+        loss: Tensor = policy_loss + entropy_loss + critic_loss
 
 
         # --------------- backward ---------------------
@@ -397,7 +403,7 @@ class VectorizedPPOAgent:
 
         # actor stats
         with torch.no_grad():
-            approx_kl_tensor = (old_lp - new_lp).mean()
+            approx_kl_tensor: Tensor = (old_lp - new_lp).mean()
             clip_frac = (ratio - 1).abs().gt(clip_eps).float().mean()
 
         # critic stats
@@ -549,7 +555,7 @@ class VectorizedPPOAgent:
             self._reset_sample_epoch_stats()
 
         # 2) periodic greedy evaluation logging
-        if ec is not None and self.eval_env and lc.eval_interval and update % lc.eval_interval == 0:
+        if ec is not None and self.eval_env is not None and lc.eval_interval and update % lc.eval_interval == 0:
             # run eval
             epsilon = 0.0
             if ec.eval_method == "sample":
@@ -640,8 +646,12 @@ class VectorizedPPOAgent:
             action_np = actions.cpu().numpy()
             next_obs, rewards, dones = eval_env.step(action_np)
 
+
+            # ---------- stats --------------------------------------------
             sum_rewards = float(torch.sum(rewards))
             stats["sum_reward"] += sum_rewards
+
+
             # ---------- unwrap next observation --------------------------
             obs = next_obs
 

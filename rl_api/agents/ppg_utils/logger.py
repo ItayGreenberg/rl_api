@@ -79,6 +79,7 @@ class Logger:
         """
         lc = self.cfg
 
+
         # --- Console ---
         if lc.verbose:
             print(f"\n[Upd {update_idx:>3} | step: {global_step}]"
@@ -90,10 +91,11 @@ class Logger:
                   f"\n| adv_mean: {stats['adv_mean']:.4f}  adv_std: {stats['adv_std']:.4f}"
                   f"  rets_mean: {stats['rets_mean']:.4f}  rets_std: {stats['rets_std']:.4f}"
 
+
                   f"\n| reward_sum: {stats['reward_sum']:.3f}  reward_pre_step: {stats['reward_per_step']:.5f}")
             
-            print(f"[Grads] enc: {stats['enc_grad']:.3g}  act: {stats['actor_grad']:.3g}"
-                  f"  critic: {stats['critic_grad']:.3g}")
+            print(f"[Grads] policy_enc: {stats['policy_enc_grad']:.3g}  act: {stats['actor_grad']:.3g}"
+                  f"  value_enc: {stats['value_enc_grad']:.3g}, critic: {stats['critic_grad']:.3g}")
             if self.param_groups_names:
                 lr_info = " | ".join(
                     f"{self.param_groups_names[i]}_lr: {pg['lr']:.2e}"
@@ -104,13 +106,14 @@ class Logger:
         # --- TensorBoard ---
         if self.writer:
             step = update_idx
+
             self.writer.add_scalar("reward/sum",     stats["reward_sum"],       step)
             self.writer.add_scalar("loss/per_step",  stats["reward_per_step"],  step)
 
 
-            self.writer.add_scalar("loss/policy", stats["policy_loss"],     step)
-            self.writer.add_scalar("loss/value",  stats["value_loss"],      step)
-            self.writer.add_scalar("loss/entropy",stats["entropy"],         step)
+            self.writer.add_scalar("loss/policy", stats["policy_loss"], step)
+            self.writer.add_scalar("loss/value",  stats["value_loss"],  step)
+            self.writer.add_scalar("loss/entropy",stats["entropy"],      step)
 
 
             self.writer.add_scalar("adv_and_rets/adv_mean",     stats["adv_mean"],      step)
@@ -119,17 +122,19 @@ class Logger:
             self.writer.add_scalar("adv_and_rets/rets_std",     stats["rets_std"],      step)
 
 
-            self.writer.add_scalar("kl_stats/approx_kl",               stats["approx_kl"],                step)
+            self.writer.add_scalar("kl_stats/approx_kl",   stats["approx_kl"],    step)
+            self.writer.add_scalar("kl_stats/true_kl",     stats["true_kl"],       step)
             self.writer.add_scalar("kl_stats/batches_used_fraction",   stats["batches_used_fraction"],    step)
 
 
             self.writer.add_scalar("clip_frac",   stats["clip_frac"],    step)
             self.writer.add_scalar("entropy_coef",stats["entropy_coef"], step)
+  
 
-
-            self.writer.add_scalar("grads/encoder", stats["enc_grad"],      step)
-            self.writer.add_scalar("grads/actor",   stats["actor_grad"],    step)
-            self.writer.add_scalar("grads/critic",  stats["critic_grad"],   step)
+            self.writer.add_scalar("grads/policy_encoder", stats["policy_enc_grad"], step)
+            self.writer.add_scalar("grads/actor",   stats["actor_grad"],  step)
+            self.writer.add_scalar("grads/critic",  stats["critic_grad"], step)
+            self.writer.add_scalar("grads/value_encoder",  stats["value_enc_grad"], step)
 
 
     def log_eval(
@@ -163,3 +168,4 @@ class Logger:
         if self.writer:
             self.writer.add_scalar(f"{prefix}/sum_reward",         sum_reward,         update)
             self.writer.add_scalar(f"{prefix}/reward_per_step",    reward_per_step,    update)
+
